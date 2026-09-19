@@ -18,7 +18,10 @@ The primary objective was to build a geographic visualization that identifies wh
 
 #### Visual Dashboard
 ### Exfil-by-Volume — NTANetAnalytics
-<img width="1589" height="470" alt="Exfil-by-Volume map placeholder — replace with actual dashboard screenshot" src="REPLACE_WITH_SCREENSHOT_URL" />
+
+<img width="1496" height="367" alt="Data Exfiltration" src="https://github.com/user-attachments/assets/c5a0ef8a-6d42-4861-82d5-4a962584dac2" />
+
+
 
 #### The KQL Query
 
