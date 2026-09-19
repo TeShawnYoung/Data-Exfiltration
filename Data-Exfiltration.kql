@@ -1,1 +1,28 @@
+NTANetAnalytics
+| where SubType == "FlowLog"
+| where isnotempty(DestPublicIps)
+| extend Parts = split(DestPublicIps, "|")
+| extend PublicIp     = tostring(Parts[0]),
+        AllowedFlows = tolong(Parts[3]),
+        DeniedFlows  = tolong(Parts[4]),
+        BytesIn      = tolong(Parts[5]),
+        BytesOut     = tolong(Parts[6])
+| where isnotempty(PublicIp)
+| where BytesOut > 0
+| extend geo = geo_info_from_ip_address(PublicIp)
+| extend Latitude  = toreal(geo.latitude),
+        Longitude = toreal(geo.longitude),
+        Country   = tostring(geo.country),
+        City      = tostring(geo.city)
+| where isnotempty(City) and isnotempty(Country)
+| where isnotempty(Latitude) and isnotempty(Longitude)
+| summarize BytesOut = sum(BytesOut),
+           BytesIn   = sum(BytesIn),
+           Sources   = dcount(SrcIp),
+           Ports     = make_set(DestPort, 15)
+        by PublicIp, Country, City, Latitude, Longitude
+| extend MB_Out = round(BytesOut / 1048576.0, 1)
+| extend MapLabel = strcat(PublicIp, " (", City, ", ", Country, ") - ", MB_Out, " MB out, ", Sources, " sources")
+| project Latitude, Longitude, MapLabel, BytesOut, MB_Out, BytesIn, Sources, Ports, PublicIp, Country, City
+| order by BytesOut desc
 
