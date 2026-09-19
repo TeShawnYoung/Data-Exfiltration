@@ -1,4 +1,4 @@
-# Data Exfiltration
+# Data Exfiltration 
 
 ## Project Overview
 
@@ -18,41 +18,38 @@ The primary objective was to build a geographic visualization that identifies wh
 
 #### Visual Dashboard
 ### Exfil-by-Volume — NTANetAnalytics
-<img width="1496" height="367" alt="image" src="https://github.com/user-attachments/assets/24764374-3c30-4b19-a223-21a1f76fa6be" />
-
+<img width="1589" height="470" alt="Exfil-by-Volume map placeholder — replace with actual dashboard screenshot" src="REPLACE_WITH_SCREENSHOT_URL" />
 
 #### The KQL Query
 
 ```kusto
 NTANetAnalytics
-| where TimeGenerated {TimeRange}
 | where SubType == "FlowLog"
 | where isnotempty(DestPublicIps)
 | extend Parts = split(DestPublicIps, "|")
 | extend PublicIp     = tostring(Parts[0]),
-        AllowedFlows = tolong(Parts[3]),
-        DeniedFlows  = tolong(Parts[4]),
-        BytesIn      = tolong(Parts[5]),
-        BytesOut     = tolong(Parts[6])
+         AllowedFlows = tolong(Parts[3]),
+         DeniedFlows  = tolong(Parts[4]),
+         BytesIn      = tolong(Parts[5]),
+         BytesOut     = tolong(Parts[6])
 | where isnotempty(PublicIp)
 | where BytesOut > 0
 | extend geo = geo_info_from_ip_address(PublicIp)
 | extend Latitude  = toreal(geo.latitude),
-        Longitude = toreal(geo.longitude),
-        Country   = tostring(geo.country),
-        City      = tostring(geo.city)
+         Longitude = toreal(geo.longitude),
+         Country   = tostring(geo.country),
+         City      = tostring(geo.city)
 | where isnotempty(City) and isnotempty(Country)
 | where isnotempty(Latitude) and isnotempty(Longitude)
 | summarize BytesOut = sum(BytesOut),
-           BytesIn   = sum(BytesIn),
-           Sources   = dcount(SrcIp),
-           Ports     = make_set(DestPort, 15)
-        by PublicIp, Country, City, Latitude, Longitude
+            BytesIn   = sum(BytesIn),
+            Sources   = dcount(SrcIp),
+            Ports     = make_set(DestPort, 15)
+         by PublicIp, Country, City, Latitude, Longitude
 | extend MB_Out = round(BytesOut / 1048576.0, 1)
 | extend MapLabel = strcat(PublicIp, " (", City, ", ", Country, ") - ", MB_Out, " MB out, ", Sources, " sources")
 | project Latitude, Longitude, MapLabel, BytesOut, MB_Out, BytesIn, Sources, Ports, PublicIp, Country, City
 | order by BytesOut desc
-
 ```
 
 ### 📊 Dashboard Analysis & Key Findings
@@ -92,10 +89,7 @@ NTANetAnalytics
 #### The KQL Query
 
 ```kusto
-// Companion grid: destinations ranked by total bytes out, with the
-// internal source fan-out feeding each (concentration = exfil staging).
 NTANetAnalytics
-| where TimeGenerated {TimeRange}
 | where SubType == "FlowLog"
 | where isnotempty(DestPublicIps)
 | extend Parts = split(DestPublicIps, "|")
@@ -107,7 +101,6 @@ NTANetAnalytics
 | extend geo = geo_info_from_ip_address(PublicIp)
 | extend Country = tostring(geo.country),
          City    = tostring(geo.city)
-// Only keep destinations the geo DB placed to a city + country.
 | where isnotempty(City) and isnotempty(Country)
 | summarize BytesOut = sum(BytesOut),
             BytesIn   = sum(BytesIn),
