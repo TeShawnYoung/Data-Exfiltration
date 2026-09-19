@@ -1,1 +1,117 @@
-
+{
+    "version": "Notebook/1.0",
+    "items": [
+        {
+            "type": 9,
+            "content": {
+                "version": "KqlParameterItem/1.0",
+                "parameters": [
+                    {
+                        "id": "tr",
+                        "version": "KqlParameterItem/1.0",
+                        "name": "TimeRange",
+                        "label": "Time range",
+                        "type": 4,
+                        "isRequired": true,
+                        "value": {
+                            "durationMs": 2592000000
+                        },
+                        "typeSettings": {
+                            "selectableValues": [
+                                {
+                                    "durationMs": 3600000
+                                },
+                                {
+                                    "durationMs": 14400000
+                                },
+                                {
+                                    "durationMs": 43200000
+                                },
+                                {
+                                    "durationMs": 86400000
+                                },
+                                {
+                                    "durationMs": 604800000
+                                },
+                                {
+                                    "durationMs": 2592000000
+                                }
+                            ]
+                        }
+                    }
+                ],
+                "style": "pills"
+            },
+            "name": "parameters",
+            "id": "61436846-c5fa-49bf-a308-d80cb1c76d3f"
+        },
+        {
+            "type": 1,
+            "content": {
+                "json": "## 4️⃣ Exfil-by-Volume — `NTANetAnalytics`\n\nMaps the external **destination** public IP of VNet flows, sized by **bytes leaving your network**. The IP and byte counters are parsed out of the `DestPublicIps` tuple (`IP|flowStarted|flowEnded|allowedInFlows|deniedInFlows|bytesIn|bytesOut`), then geo-enriched.\n\nBubble **size** = `bytesOut` (data sent). **A fat bubble in an unusual region = a large outbound transfer — the true data-exfil signal the MDE tables can't show.** Drill into any single destination that dominates total egress.\n\n> Filters to `SubType == \"FlowLog\"` and to destinations resolved to a city + country. Byte counters here are populated, so volume-based sizing is meaningful."
+            },
+            "name": "text-exfil",
+            "id": "1f4e2297-5bbe-485f-8826-8af37599e5a3"
+        },
+        {
+            "type": 3,
+            "content": {
+                "version": "KqlItem/1.0",
+                "query": "// === Exfil-by-volume (NTANetAnalytics, DestPublicIps) ===\n// DestPublicIps packs: IP|flowStarted|flowEnded|allowedInFlows|deniedInFlows|bytesIn|bytesOut\n// One IP tuple per row in v3, delimited by '|'.\nNTANetAnalytics\n| where TimeGenerated {TimeRange}\n// FlowLog is the only externally-meaningful subtype; others are internal.\n| where SubType == \"FlowLog\"\n| where isnotempty(DestPublicIps)\n// Split the packed tuple on '|' and name each position.\n| extend Parts = split(DestPublicIps, \"|\")\n| extend PublicIp     = tostring(Parts[0]),\n         AllowedFlows = tolong(Parts[3]),\n         DeniedFlows  = tolong(Parts[4]),\n         BytesIn      = tolong(Parts[5]),\n         BytesOut     = tolong(Parts[6])\n| where isnotempty(PublicIp)\n// Only flows that actually carried outbound bytes (the exfil-relevant set).\n| where BytesOut > 0\n// Enrich the destination IP with geolocation (country/city/lat/long).\n| extend geo = geo_info_from_ip_address(PublicIp)\n| extend Latitude  = toreal(geo.latitude),\n         Longitude = toreal(geo.longitude),\n         Country   = tostring(geo.country),\n         City      = tostring(geo.city)\n// Only keep destinations the geo DB placed to a city + country.\n| where isnotempty(City) and isnotempty(Country)\n| where isnotempty(Latitude) and isnotempty(Longitude)\n// One bubble per destination. Sum bytes out across all flows to it.\n// 'Sources' = how many internal hosts fed data to this destination.\n| summarize BytesOut = sum(BytesOut),\n            BytesIn   = sum(BytesIn),\n            Sources   = dcount(SrcIp),\n            Ports     = make_set(DestPort, 15)\n         by PublicIp, Country, City, Latitude, Longitude\n// Convert to MB for a readable label.\n| extend MB_Out = round(BytesOut / 1048576.0, 1)\n| extend MapLabel = strcat(PublicIp, \" (\", City, \", \", Country, \") - \", MB_Out, \" MB out, \", Sources, \" sources\")\n| project Latitude, Longitude, MapLabel, BytesOut, MB_Out, BytesIn, Sources, Ports, PublicIp, Country, City\n| order by BytesOut desc",
+                "size": 0,
+                "title": "Outbound volume by destination — bubble size = bytes sent",
+                "timeContextFromParameter": "TimeRange",
+                "queryType": 0,
+                "resourceType": "microsoft.operationalinsights/workspaces",
+                "visualization": "map",
+                "mapSettings": {
+                    "locInfo": "LatLong",
+                    "latitude": "Latitude",
+                    "longitude": "Longitude",
+                    "sizeSettings": "BytesOut",
+                    "sizeAggregation": "Sum",
+                    "labelSettings": "MapLabel",
+                    "legendMetric": "BytesOut",
+                    "legendAggregation": "Sum",
+                    "legendColor": "BytesOut",
+                    "itemColorSettings": {
+                        "nodeColorField": "BytesOut",
+                        "colorAggregation": "Sum",
+                        "type": "heatmap",
+                        "heatmapPalette": "greenRed"
+                    }
+                },
+                "crossComponentResources": [
+                    "/subscriptions/3c95e63a-895a-4386-991e-edbbf57de5c8/resourceGroups/cyber-range-admin-soc/providers/Microsoft.OperationalInsights/workspaces/LAW-Cyber-Range"
+                ]
+            },
+            "name": "map-exfil",
+            "id": "c38f33af-a05c-42d6-ad6d-b17b06dee711"
+        },
+        {
+            "type": 3,
+            "content": {
+                "version": "KqlItem/1.0",
+                "query": "// Companion grid: destinations ranked by total bytes out, with the\n// internal source fan-out feeding each (concentration = exfil staging).\nNTANetAnalytics\n| where TimeGenerated {TimeRange}\n| where SubType == \"FlowLog\"\n| where isnotempty(DestPublicIps)\n| extend Parts = split(DestPublicIps, \"|\")\n| extend PublicIp = tostring(Parts[0]),\n         DeniedFlows = tolong(Parts[4]),\n         BytesIn  = tolong(Parts[5]),\n         BytesOut = tolong(Parts[6])\n| where isnotempty(PublicIp) and BytesOut > 0\n| extend geo = geo_info_from_ip_address(PublicIp)\n| extend Country = tostring(geo.country),\n         City    = tostring(geo.city)\n// Only keep destinations the geo DB placed to a city + country.\n| where isnotempty(City) and isnotempty(Country)\n| summarize BytesOut = sum(BytesOut),\n            BytesIn   = sum(BytesIn),\n            Sources   = dcount(SrcIp),\n            Ports     = make_set(DestPort, 15)\n         by PublicIp, Country, City\n| extend MB_Out = round(BytesOut / 1048576.0, 1)\n| project PublicIp, Country, City, BytesOut, MBOut = round(toreal(BytesOut)/1024, 1),\n    GBOut = round(toreal(BytesOut)/1024/1024, 1),\n    TBOut = round(toreal(BytesOut)/1024/1024/1024, 1), BytesIn, Sources, Ports\n| order by BytesOut desc",
+                "size": 0,
+                "title": "Destination volume breakdown (MB out + source fan-out)",
+                "timeContextFromParameter": "TimeRange",
+                "queryType": 0,
+                "resourceType": "microsoft.operationalinsights/workspaces",
+                "visualization": "table",
+                "crossComponentResources": [
+                    "/subscriptions/3c95e63a-895a-4386-991e-edbbf57de5c8/resourceGroups/cyber-range-admin-soc/providers/Microsoft.OperationalInsights/workspaces/LAW-Cyber-Range"
+                ]
+            },
+            "name": "grid-exfil",
+            "id": "91e1a0d0-0471-444b-b289-af6894c40f56"
+        }
+    ],
+    "fallbackResourceIds": [
+        "/subscriptions/cd015a7d-a927-49c6-896a-67d4a4886ef4/resourceGroups/cyber-range-2-admin-soc/providers/Microsoft.OperationalInsights/workspaces/LAW-SilentCorridor"
+    ],
+    "$schema": "https://github.com/Microsoft/Application-Insights-Workbooks/blob/master/schema/workbook.json",
+    "context": {
+        "ownerId": "/subscriptions/3c95e63a-895a-4386-991e-edbbf57de5c8/resourceGroups/cyber-range-admin-soc/providers/Microsoft.OperationalInsights/workspaces/LAW-Cyber-Range"
+    }
+}
