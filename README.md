@@ -19,16 +19,20 @@ The primary objective was to build a geographic visualization that identifies wh
 #### Visual Dashboard
 ### Exfil-by-Volume — NTANetAnalytics
 
-<img width="1496" height="367" alt="Data Exfiltration" src="https://github.com/user-attachments/assets/c5a0ef8a-6d42-4861-82d5-4a962584dac2" />
-
-
+<img width="1046" height="364" alt="Screenshot 2026-09-19 143027" src="https://github.com/user-attachments/assets/62e9ce6e-3ffe-4f58-b065-3b774f9bb0ee" />
 
 #### The KQL Query
 
 ```kusto
+// === Exfil-by-volume (NTANetAnalytics, DestPublicIps) ===
+// DestPublicIps packs: IP|flowStarted|flowEnded|allowedInFlows|deniedInFlows|bytesIn|bytesOut
+// One IP tuple per row in v3, delimited by '|'.
 NTANetAnalytics
+| where TimeGenerated {TimeRange}
+// FlowLog is the only externally-meaningful subtype; others are internal.
 | where SubType == "FlowLog"
 | where isnotempty(DestPublicIps)
+// Split the packed tuple on '|' and name each position.
 | extend Parts = split(DestPublicIps, "|")
 | extend PublicIp     = tostring(Parts[0]),
          AllowedFlows = tolong(Parts[3]),
@@ -36,19 +40,25 @@ NTANetAnalytics
          BytesIn      = tolong(Parts[5]),
          BytesOut     = tolong(Parts[6])
 | where isnotempty(PublicIp)
+// Only flows that actually carried outbound bytes (the exfil-relevant set).
 | where BytesOut > 0
+// Enrich the destination IP with geolocation (country/city/lat/long).
 | extend geo = geo_info_from_ip_address(PublicIp)
 | extend Latitude  = toreal(geo.latitude),
          Longitude = toreal(geo.longitude),
          Country   = tostring(geo.country),
          City      = tostring(geo.city)
+// Only keep destinations the geo DB placed to a city + country.
 | where isnotempty(City) and isnotempty(Country)
 | where isnotempty(Latitude) and isnotempty(Longitude)
+// One bubble per destination. Sum bytes out across all flows to it.
+// 'Sources' = how many internal hosts fed data to this destination.
 | summarize BytesOut = sum(BytesOut),
             BytesIn   = sum(BytesIn),
             Sources   = dcount(SrcIp),
             Ports     = make_set(DestPort, 15)
          by PublicIp, Country, City, Latitude, Longitude
+// Convert to MB for a readable label.
 | extend MB_Out = round(BytesOut / 1048576.0, 1)
 | extend MapLabel = strcat(PublicIp, " (", City, ", ", Country, ") - ", MB_Out, " MB out, ", Sources, " sources")
 | project Latitude, Longitude, MapLabel, BytesOut, MB_Out, BytesIn, Sources, Ports, PublicIp, Country, City
@@ -92,7 +102,10 @@ NTANetAnalytics
 #### The KQL Query
 
 ```kusto
+// Companion grid: destinations ranked by total bytes out, with the
+// internal source fan-out feeding each (concentration = exfil staging).
 NTANetAnalytics
+| where TimeGenerated {TimeRange}
 | where SubType == "FlowLog"
 | where isnotempty(DestPublicIps)
 | extend Parts = split(DestPublicIps, "|")
@@ -104,6 +117,7 @@ NTANetAnalytics
 | extend geo = geo_info_from_ip_address(PublicIp)
 | extend Country = tostring(geo.country),
          City    = tostring(geo.city)
+// Only keep destinations the geo DB placed to a city + country.
 | where isnotempty(City) and isnotempty(Country)
 | summarize BytesOut = sum(BytesOut),
             BytesIn   = sum(BytesIn),
